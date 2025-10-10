@@ -91,6 +91,7 @@ RC$other_allele <- toupper(RC$other_allele)
 RC <- RC  |> dplyr::filter(eaf > 0.01)
 lambda = round(median(RC$Z^2) / 0.454, 3)
 lambda
+# 1.046
 #add chr and pos
 Karjalainen <- select(Karjalainen_RC, rsid, chr, pos)
 UKB <- select(Karjalainen_RC, rsid,chr, pos)
