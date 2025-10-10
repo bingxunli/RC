@@ -18,3 +18,179 @@ library(VariantAnnotation)
 library(ggrepel)
 library(susieR)
 library(hyprcoloc)
+setwd("C:/Users/bingxun li/Desktop/RC")
+#### data source and format ####
+#Karjalainen MK, https://pubmed.ncbi.nlm.nih.gov/38448586/, build 37
+#https://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90302001-GCST90303000/GCST90302074
+Karjalainen_RC <- fread('GCST90302074.h.tsv.gz',data.table =F)
+head(Karjalainen_RC)
+Karjalainen_RC$N <- 4435 +11340 +120241
+colnames(Karjalainen_RC)[8] <- 'pval'
+Karjalainen_RC$pval <- as.numeric(Karjalainen_RC$pval)
+Karjalainen_RC$pval[Karjalainen_RC$pval == 0] <- 2.2e-308
+Karjalainen_RC <- separate(Karjalainen_RC, variant_id, 
+                           into = c("chr", "pos", "A1", "A2"), 
+                           sep = "_", remove = FALSE)
+colnames(Karjalainen_RC)
+Karjalainen_RC <- Karjalainen_RC|> dplyr::filter(effect_allele_frequency  > 0.01)
+Karjalainen_RC_clump <- Karjalainen_RC|> ieugwasr::ld_clump(Karjalainen_RC,
+                                                            clump_kb = 10000,
+                                                            clump_r2 = 0.001,
+                                                            clump_p = 5e-8,
+                                                            pop = "EUR",
+                                                            plink_bin = "C:/Users/bingxun li/AppData/Local/R/win-library/4.3/plinkbinr/bin/plink_Windows.exe",
+                                                            bfile = "C:/Users/bingxun li/Desktop/1kgv3/EUR")
+write.table(Karjalainen_RC,'Karjalainen_RC.txt',row.names =F,col.names = T,sep = '\t',quote = F)
+
+#Metabolic biomarkers in the UK Biobank measured by Nightingale Health 2020
+#https://opengwas.io/datasets/met-d-Remnant_C#
+#GRCh37
+RC_UKB <- read.vcfR(file = 'met-d-Remnant_C.vcf.gz')
+vcf_df <- cbind(as.data.frame(RC_UKB@fix), 
+                as.data.frame(RC_UKB@gt))
+str(vcf_df)
+vcf_df <- vcf_df %>%
+  separate(`met-d-Remnant_C`, 
+           into = c("beta", "se", "lp_stat", "eaf", "rsid"), 
+           sep = ":", 
+           remove = TRUE, 
+           convert = TRUE)
+vcf_df$pval <- 10^(-as.numeric(vcf_df$lp_stat))
+vcf_df$SS <- 	115078
+vcf_df$id <- "met-d-Remnant_C"
+RC_UKB <- vcf_df
+colnames(RC_UKB)[1] <- 'chr'
+colnames(RC_UKB)[2] <- 'pos'
+RC_UKB <- RC_UKB  |> dplyr::filter(eaf  > 0.01)
+RC_UKB$pval[RC_UKB$pval == 0] <- 2.2e-308
+RC_UKB_clump <- RC_UKB|> ieugwasr::ld_clump(RC_UKB,
+                                            clump_kb = 10000,
+                                            clump_r2 = 0.001,
+                                            clump_p = 5e-8,
+                                            pop = "EUR",
+                                            plink_bin = "C:/Users/bingxun li/AppData/Local/R/win-library/4.3/plinkbinr/bin/plink_Windows.exe",
+                                            bfile = "C:/Users/bingxun li/Desktop/1kgv3/EUR")
+write.table(RC_UKB,'RC_UKB.txt',row.names =F,col.names = T,sep = '\t',quote = F)
+#RC_UKB <- fread('RC_UKB.txt)
+system_check()
+get_config('~/RC')
+job <- setup_inspector("~/RC/config.ini")
+job <- run_inspector(job)
+result_inspector(job) 
+####RC meta analysis results####
+RC=fread('METAANALYSIS2.TBL',data.table = F) 
+colnames(RC)
+RC$se <- 1/sqrt(2*RC$Freq1*(1-RC$Freq1)*(RC$Freq1)*(RC$Weight+(RC$Zscore)^2))
+RC$beta <-(RC$Zscore)*(RC$se)
+# se and beta were calculated according to reference: PMID: 27019110
+#colnames："rsid"，"beta"，"se"，"eaf"，"effect_allele"，"other_allele"，"pval"，"N"
+RC = RC[,c(1:4,8:10,15:17)]
+colnames(RC) = c("rsid","effect_allele","other_allele","eaf",'N','Z',"pval",'HetPVal',"se","beta")
+RC$effect_allele <- toupper(RC$effect_allele)
+RC$other_allele <- toupper(RC$other_allele)
+RC <- RC  |> dplyr::filter(eaf > 0.01)
+lambda = round(median(RC$Z^2) / 0.454, 3)
+lambda
+#add chr and pos
+Karjalainen <- select(Karjalainen_RC, rsid, chr, pos)
+UKB <- select(Karjalainen_RC, rsid,chr, pos)
+df1 <- rbind(Karjalainen, UKB)
+df1 <- df1[!duplicated(df1$rsid),]
+RC <- merge(RC, df1, by.x = "rsid", by.y = "rsid")
+head(RC)
+#exclude MHC for complex LD
+#chr6: 28,477,797-33,448,354, see https://www.ncbi.nlm.nih.gov/grc/human/regions/MHC?asm=GRCh37
+mhc_start <- 28477797
+mhc_end <- 33448354
+RC <- RC[!(chr == 6 & pos >= mhc_start & pos <= mhc_end), ]
+write.table(RC, 'RC.txt', sep='\t', quote=FALSE, row.names=FALSE)
+#clump
+RC_clump <- RC|> ieugwasr::ld_clump(RC,clump_kb = 10000,
+                                     clump_r2 = 0.001,
+                                     clump_p = 5e-8,
+                                     pop = "EUR",
+                                     plink_bin = "C:/Users/bingxun li/AppData/Local/R/win-library/4.3/plinkbinr/bin/plink_Windows.exe",
+                                     bfile = "C:/Users/bingxun li/Desktop/1kgv3/EUR")
+#identify novel SNPs (> 500 kb)
+orig_loci <- rbind(RC_UKB_clump [,c('rsid','chr','pos')],
+                   Karjalainen_RC_clump[,c('rsid','chr','pos')],
+                   use.names=FALSE) %>% distinct(rsid,.keep_all = TRUE)
+orig_loci$chr <- as.numeric(orig_loci$chr)
+orig_loci$pos <- as.numeric(orig_loci$pos)
+
+filter_list <- list()
+for (i in 1:nrow(orig_loci)){
+  filter_list[[i]] <- subset(RC_clump, chr == orig_loci$chr [i] & 
+                               pos>= orig_loci$pos[i] - 500000 & 
+                               pos <= orig_loci$pos[i] + 500000)
+}
+filter_list <- do.call(rbind, filter_list) %>% distinct(rsid, .keep_all = TRUE)
+RC_filtered <- subset(RC_clump, ! rsid %in% filter_list$rsid)
+write.table(RC_clump, 'RC_clump.txt', sep='\t', quote=FALSE, row.names=FALSE)
+write.table(RC_filtered, 'RC_filtered.txt', sep='\t', quote=FALSE, row.names=FALSE)
+
+####annovar####
+RC_clump <- fread('RC_clump.txt')
+RC_clump_clean <- na.omit(RC_clump)
+fix_df <- data.frame(
+  CHROM = as.character(RC_clump_clean$chr),  
+  POS = as.character(RC_clump_clean$pos),
+  ID = RC_clump_clean$rsid,
+  REF = RC_clump_clean$other_allele,
+  ALT = RC_clump_clean$effect_allele,
+  QUAL = ".", 
+  FILTER = "PASS", 
+  INFO = paste0(
+    "AF=", round(RC_clump_clean$eaf, 6),
+    ";BETA=", round(RC_clump_clean$beta, 6),
+    ";SE=", round(RC_clump_clean$se, 6),
+    ";P=", RC_clump_clean$pval,
+    ";Z=", round(RC_clump_clean$Z, 6),
+    ";N=", RC_clump_clean$N
+  ),
+  stringsAsFactors = FALSE
+)
+format_col <- "GT:GQ:DP"  
+sample_col <- paste0("0/1:", 
+                     round(runif(nrow(RC_clump_clean), 40, 60)), ":",  
+                     round(runif(nrow(RC_clump_clean), 5, 20)))        
+
+gt_df <- data.frame(
+  FORMAT = format_col,
+  SAMPLE = sample_col, 
+  stringsAsFactors = FALSE
+)
+vcf_final <- cbind(fix_df, gt_df)
+con <- file("RC_clump_annovar_final.vcf", "w")
+writeLines(c(
+  '##fileformat=VCFv4.2',
+  '##fileDate=20240501',
+  '##source=GWAS_Summary_Statistics',
+  '##FILTER=<ID=PASS,Description="All filters passed">',
+  '##INFO=<ID=AF,Number=1,Type=Float,Description="Allele Frequency">',
+  '##INFO=<ID=BETA,Number=1,Type=Float,Description="Effect Size">',
+  '##INFO=<ID=SE,Number=1,Type=Float,Description="Standard Error">',
+  '##INFO=<ID=P,Number=1,Type=Float,Description="P-value">',
+  '##INFO=<ID=Z,Number=1,Type=Float,Description="Z-score">',
+  '##INFO=<ID=N,Number=1,Type=Integer,Description="Sample Size">',
+  '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+  '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">',
+  '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read Depth">',
+  '#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE'
+), con)
+close(con)
+write.table(vcf_final, "RC_clump_annovar_final.vcf", sep = "\t", 
+            row.names = FALSE, col.names = FALSE, 
+            quote = FALSE, append = TRUE)
+
+cat("标准VCF文件已生成: RC_clump_annovar_final.vcf\n")
+cat("文件行数:", nrow(vcf_final), "\n")
+cat("\n文件前3行内容:\n")
+system("head -5 RC_annovar_final.vcf")
+
+cat("\n文件结构检查:\n")
+cat("列数:", ncol(vcf_final), "\n")
+cat("列名:", names(vcf_final), "\n")
+#results
+annovar <- fread('my_first_anno.hg19_multianno.txt')
+write.table(annovar,'annovar_clump.txt',row.names =F,col.names = T,sep = '\t',quote = F)
